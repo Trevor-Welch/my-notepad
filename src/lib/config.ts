@@ -1,0 +1,1 @@
+export const ALLOWED_EMAIL = 'welch.trevor@yahoo.com';

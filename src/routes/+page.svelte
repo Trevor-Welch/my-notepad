@@ -1,39 +1,52 @@
-<script>
+<script lang="ts">
 	import { onMount } from 'svelte';
-	import { auth, db } from '$lib/firebase';
-	import { onAuthStateChanged } from 'firebase/auth';
-	import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+	import { auth } from '$lib/firebase';
+	import { onAuthStateChanged, type User } from 'firebase/auth';
 	import { goto } from '$app/navigation';
+	import { ALLOWED_EMAIL } from '$lib/config';
+	import { notesStore } from '$lib/stores/notes';
+	import AddNote from '$lib/components/AddNote.svelte';
+	import NotesList from '$lib/components/NotesList.svelte';
 
-	let noteContent = '';
 	let loading = true;
-	let user = null;
+	let loadingNotes = false;
+	let user: User | null = null;
+	let isAllowed = false;
+
+	$: notes = $notesStore;
 
 	onMount(() => {
-		if (auth) {
-			const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-				user = currentUser;
-				
-				if (!currentUser) {
-					goto('/login');
-					return;
-				}
+		if (!auth) return;
 
-				// Listen to note changes in real-time
-				const noteRef = doc(db, 'notes', currentUser.uid);
-				const unsubscribeSnapshot = onSnapshot(noteRef, (doc) => {
-					if (doc.exists()) {
-						noteContent = doc.data().content || '';
-					}
-					loading = false;
-				});
+		const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+			user = currentUser;
+			
+			if (!currentUser) {
+				goto('/login');
+				return;
+			}
 
-				return () => unsubscribeSnapshot();
-			});
+			isAllowed = currentUser.email === ALLOWED_EMAIL;
+			
+			if (isAllowed) {
+				loadingNotes = true;
+				await notesStore.load();
+				loadingNotes = false;
+			}
+			
+			loading = false;
+		});
 
-			return () => unsubscribe();
-		}
+		return unsubscribe;
 	});
+
+	async function handleAddNote(content: string) {
+		await notesStore.add(content);
+	}
+
+	async function handleDeleteNote(id: string) {
+		await notesStore.delete(id);
+	}
 
 	async function signOut() {
 		if (auth) {
@@ -41,110 +54,82 @@
 			goto('/login');
 		}
 	}
-
-	async function saveNote() {
-		if (db && user) {
-			await setDoc(doc(db, 'notes', user.uid), {
-				content: noteContent,
-				updatedAt: new Date()
-			});
-		}
-	}
-
-	// Auto-save with debouncing
-	let saveTimeout;
-	function handleInput() {
-		clearTimeout(saveTimeout);
-		saveTimeout = setTimeout(saveNote, 1000);
-	}
 </script>
 
-<main>
-	{#if loading}
-		<div class="loading">Loading...</div>
-	{:else}
-		<div class="header">
-			<h1>My Notepad</h1>
-			<div class="user-info">
-				<span>{user?.email}</span>
-				<button on:click={signOut}>Sign Out</button>
-			</div>
+{#if loading}
+	<main>
+		<p>Loading...</p>
+	</main>
+{:else if !isAllowed}
+	<main>
+		<div>
+			<p>You are not allowed to use this app, sorry</p>
+			<p class="email">Logged in as: {user?.email}</p>
+			<button on:click={signOut}>Sign out</button>
 		</div>
-		<textarea
-			bind:value={noteContent}
-			on:input={handleInput}
-			placeholder="Start writing your notes..."
-		/>
-	{/if}
-</main>
+	</main>
+{:else}
+	<main>
+		<div class="container">
+			<div class="header">
+				<p>You're logged in as {user?.email}</p>
+				<button on:click={signOut}>Sign out</button>
+			</div>
+
+			<AddNote onAdd={handleAddNote} />
+			<NotesList {notes} loading={loadingNotes} onDelete={handleDeleteNote} />
+		</div>
+	</main>
+{/if}
 
 <style>
-	main {
-		max-width: 900px;
-		margin: 0 auto;
-		padding: 2rem;
-		min-height: 100vh;
+	:global(body) {
+		margin: 0;
+		background: #000;
+		color: #fff;
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	}
 
-	.loading {
-		text-align: center;
-		padding: 4rem;
-		color: #666;
+	main {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		min-height: 100vh;
+		padding: 2rem;
+	}
+
+	.container {
+		width: 100%;
+		max-width: 800px;
 	}
 
 	.header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		margin-bottom: 1.5rem;
-		padding-bottom: 1rem;
-		border-bottom: 2px solid #eee;
+		text-align: center;
+		margin-bottom: 3rem;
 	}
 
-	h1 {
-		margin: 0;
-		color: #333;
+	p {
+		margin: 0 0 1.5rem 0;
+		font-size: 1.1rem;
 	}
 
-	.user-info {
-		display: flex;
-		align-items: center;
-		gap: 1rem;
-	}
-
-	.user-info span {
-		color: #666;
+	.email {
 		font-size: 0.9rem;
+		color: #888;
+		margin-bottom: 1.5rem;
 	}
 
 	button {
-		padding: 0.5rem 1rem;
-		background: #4285f4;
-		color: white;
+		padding: 1rem 2rem;
+		background: #fff;
+		color: #000;
 		border: none;
-		border-radius: 4px;
+		font-size: 1rem;
 		cursor: pointer;
-		font-size: 0.9rem;
+		font-weight: 500;
 	}
 
 	button:hover {
-		background: #357ae8;
-	}
-
-	textarea {
-		width: 100%;
-		min-height: calc(100vh - 200px);
-		padding: 1.5rem;
-		font-size: 1rem;
-		line-height: 1.6;
-		border: 1px solid #ddd;
-		border-radius: 8px;
-		resize: vertical;
-		font-family: inherit;
-	}
-
-	textarea:focus {
-		outline: none;
-		border-color: #4285f4;
+		background: #ddd;
 	}
 </style>
